@@ -1081,11 +1081,12 @@ def break_graph_if_unsupported(
     ) -> Callable[[InstructionTranslatorBase, Instruction], None]:
         @functools.wraps(inner_fn)
         def wrapper(self: InstructionTranslatorBase, inst: Instruction) -> None:
+            if not self.should_compile_partial_graph():
+                return inner_fn(self, inst)
             prev_push = self.current_instruction_push
             self.current_instruction_push = push
             speculation = self.speculate()
             if speculation.failed(self):
-                # no need to restore current_instruction_push if speculation failed
                 if speculation.reason is None:
                     raise AssertionError(
                         "expected speculation.reason is not None to be true"
@@ -3189,8 +3190,18 @@ class InstructionTranslatorBase(
         if sys.version_info >= (3, 12):
             # pyrefly: ignore [unsupported-operation]
             if inst.arg % 2:
+                # LOAD_METHOD pushes 2 values (NULL + method), which
+                # break_graph_if_unsupported can't handle (it only
+                # supports 0 or 1 outputs). Use step() fallback.
                 self.LOAD_METHOD(inst)
                 return
+        self._load_attr_break_graph_if_unsupported(inst)
+
+    @break_graph_if_unsupported(
+        push=True,
+        msg_prefix="Encountered graph break when attempting to trace LOAD_ATTR: loading an object's attribute, e.g. x.attr",
+    )
+    def _load_attr_break_graph_if_unsupported(self, inst: Instruction) -> None:
         self._load_attr(inst.argval)
 
     @break_graph_if_unsupported(
